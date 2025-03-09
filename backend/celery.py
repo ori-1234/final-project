@@ -20,4 +20,8 @@ app.conf.beat_schedule = {
         'task': 'analytics.tasks.update_all_coin_details',
         'schedule': crontab(hour=0, minute=0),  # Run at midnight
     },
+    # 'fetch-reddit-posts-every-15-minutes': {
+    #     'task': 'analytics.tasks.fetch_reddit_posts',
+    #     'schedule': crontab(minute='*/15'),  # Run every 15 minutes
+    # },
 }

@@ -1,37 +1,47 @@
 import pandas as pd
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+from django.utils.timezone import now
+from ..models import RedditPost
 
-# שם המודל
-model_name = "ElKulako/cryptobert"
+class SentimentAnalyzer:
+    def __init__(self):
+        """
+        Initialize the sentiment analyzer with the CryptoBERT model.
+        """
+        self.model_name = "ElKulako/cryptobert"
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-# טעינת המודל וה-tokenizer
-model = AutoModelForSequenceClassification.from_pretrained(model_name)
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Set up sentiment pipeline
+        self.sentiment_pipeline = pipeline(
+            "sentiment-analysis",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            device=0 if torch.cuda.is_available() else -1
+        )
 
-# הגדרת pipeline לניתוח סנטימנט
-sentiment_pipeline = pipeline(
-    "sentiment-analysis",
-    model=model,
-    tokenizer=tokenizer,
-    device=0 if torch.cuda.is_available() else -1
-)
+    def analyze_sentiment(self, text):
+        """
+        Analyze sentiment of a given text.
+        Returns a tuple (label, score).
+        """
+        if not text.strip():
+            return "neutral", 0.0  # Default for empty text
 
+        result = self.sentiment_pipeline(text)[0]
+        return result["label"], result["score"]
 
+    def process_posts(self):
+        """
+        Fetch Reddit posts with null sentiment scores, analyze them, and update the database.
+        """
+        posts = RedditPost.objects.filter(sentiment_score__isnull=True)
 
-# טעינת הנתונים מהקובץ שהעלית
-df = pd.read_csv("/mnt/data/Reddit_data.csv")  # עדכן את שם הקובץ לפי הצורך
+        for post in posts:
+            sentiment_label, sentiment_score = self.analyze_sentiment(post.content)
+            post.sentiment_score = sentiment_score
+            post.save()
+            print(f"Updated post {post.post_id} with sentiment {sentiment_label} ({sentiment_score})")
 
-# בדיקה שהעמודה text קיימת
-if "text" not in df.columns:
-    raise ValueError("העמודה 'text' לא נמצאה בנתונים!")
-
-# הפעלת המודל על כל הטקסטים
-df["sentiment"] = df["text"].apply(lambda x: sentiment_pipeline(x)[0]['label'])
-df["sentiment_score"] = df["text"].apply(lambda x: sentiment_pipeline(x)[0]['score'])
-
-# הצגת התוצאות הראשונות
-print(df[["text", "sentiment", "sentiment_score"]].head())
-
-# שמירת התוצאות לקובץ חדש
-df.to_csv("/mnt/data/Reddit_Sentiment_Analysis.csv", index=False)
+        print("Sentiment analysis completed.")
