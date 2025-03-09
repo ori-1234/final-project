@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     # ... My apps ...
     'user',
     'analytics',
+    'analysis',
 ]
 
 MIDDLEWARE = [
