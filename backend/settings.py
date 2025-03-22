@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     'analysis', 
     'user',
     'analytics',
+    'django_extensions'
 ]
 
 # Middleware configuration

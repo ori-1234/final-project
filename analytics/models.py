@@ -1,5 +1,4 @@
 from django.db import models
-# from django.contrib.postgres.fields import ArrayField
 
 class Coin(models.Model):
     SYMBOLS = [
@@ -35,7 +34,7 @@ class MarketData(models.Model):
     taker_buy_quote_volume = models.DecimalField(max_digits=32, decimal_places=8, null=True, default=0)
     price_change_percent_24h = models.DecimalField(max_digits=10, decimal_places=2, null=True, default=0)
     
-    # Technical Indicators
+    # 📉 Technical Indicators
     rsi = models.DecimalField(max_digits=10, decimal_places=2, null=True)
     macd = models.DecimalField(max_digits=20, decimal_places=8, null=True)
     macd_signal = models.DecimalField(max_digits=20, decimal_places=8, null=True)
@@ -43,6 +42,10 @@ class MarketData(models.Model):
     bb_upper = models.DecimalField(max_digits=20, decimal_places=8, null=True)
     bb_middle = models.DecimalField(max_digits=20, decimal_places=8, null=True)
     bb_lower = models.DecimalField(max_digits=20, decimal_places=8, null=True)
+
+    # 🆕 הוספת ATR ו-Williams %R
+    atr = models.DecimalField(max_digits=10, decimal_places=2, null=True)
+    williams_r = models.DecimalField(max_digits=10, decimal_places=2, null=True)
 
     class Meta:
         indexes = [
@@ -54,4 +57,3 @@ class MarketData(models.Model):
 
     def __str__(self):
         return f"{self.symbol.symbol} - {self.close_time}"
-

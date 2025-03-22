@@ -12,6 +12,8 @@ import ta
 from django.core.cache import cache
 from typing import Optional, Dict, Any
 from collections import defaultdict
+import numpy as np  # תוסיף את זה בתחילת הקובץ
+
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +141,12 @@ def fetch_missing_klines(self):
                     df = calculate_technical_indicators(df)
                     process_and_store_data(coin, df)
                     
-                    # Update chart data cache after new data is stored
+                    # עדכון מטמון אחרי אחסון הנתונים
                     update_coin_details_cache.delay(coin.symbol)
+
+                    # ✅ הדפסה של שם המטבע והמחיר האחרון שלו
+                    last_price = df.iloc[-1]['Close']
+                    print(f"📈 {coin.symbol}: {last_price:.2f} USDT")
 
             except Exception as e:
                 logger.error(f"Error processing {coin.symbol}: {str(e)}")
@@ -149,6 +155,7 @@ def fetch_missing_klines(self):
     except Exception as e:
         logger.error(f"Error in fetch_missing_klines: {str(e)}")
         self.retry(exc=e, countdown=60)
+
 
 
 def calculate_24h_price_change(coin: Coin, current_price: float, current_time: datetime) -> float:
@@ -174,17 +181,18 @@ def calculate_24h_price_change(coin: Coin, current_price: float, current_time: d
         ).order_by('-close_time').first()
 
         if old_price_record and old_price_record.close_price > 0:
-            price_change = (
-                (current_price - old_price_record.close_price) /
-                old_price_record.close_price
-            ) * 100
+            # המרה ל-float כדי למנוע TypeError
+            old_price = float(old_price_record.close_price)
+            price_change = ((current_price - old_price) / old_price) * 100
             result = round(price_change, 2)
+
             cache.set(cache_key, result, timeout=60)  # Cache for 1 minute
             return result
         return 0
     except Exception as e:
         logger.error(f"Error calculating price change for {coin.symbol}: {str(e)}")
         return 0
+
 
 
 def fetch_klines_data(symbol: str, start_time: datetime, end_time: datetime) -> Optional[pd.DataFrame]:
@@ -240,8 +248,9 @@ def fetch_klines_data(symbol: str, start_time: datetime, end_time: datetime) -> 
             df = pd.DataFrame(all_data, columns=columns)
 
             # Convert timestamps to datetime
-            df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms')
-            df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms')
+            df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms', utc=True)
+            df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms', utc=True)
+
 
             # Convert numeric columns
             numeric_columns = [
@@ -267,6 +276,9 @@ def fetch_klines_data(symbol: str, start_time: datetime, end_time: datetime) -> 
 def process_and_store_data(coin: Coin, df: pd.DataFrame) -> None:
     """Process and store market data with technical indicators."""
     try:
+        # 🛠️ שינוי השיטה של fillna כך שתעבוד על כל העמודות
+        df = df.fillna(value=0)  # מחליף NaN ב-0 לכל הנתונים המספריים
+
         bulk_data = []
         for _, row in df.iterrows():
             price_change = calculate_24h_price_change(
@@ -286,16 +298,16 @@ def process_and_store_data(coin: Coin, df: pd.DataFrame) -> None:
                 volume=row['Volume'],
                 quote_volume=row['Quote Asset Volume'],
                 num_trades=row['Number of Trades'],
-                taker_buy_base_volume=float(row['Taker Buy Base Volume']),
-                taker_buy_quote_volume=float(row['Taker Buy Quote Volume']),
+                taker_buy_base_volume=row['Taker Buy Base Volume'],
+                taker_buy_quote_volume=row['Taker Buy Quote Volume'],
                 price_change_percent_24h=price_change,
-                rsi=row.get('RSI'),
-                macd=row.get('MACD'),
-                macd_signal=row.get('MACD_Signal'),
-                macd_hist=row.get('MACD_Hist'),
-                bb_upper=row.get('BB_Upper'),
-                bb_middle=row.get('BB_Middle'),
-                bb_lower=row.get('BB_Lower')
+                rsi=row.get('RSI', None),
+                macd=row.get('MACD', None),
+                macd_signal=row.get('MACD_Signal', None),
+                macd_hist=row.get('MACD_Hist', None),
+                bb_upper=row.get('BB_Upper', None),
+                bb_middle=row.get('BB_Middle', None),
+                bb_lower=row.get('BB_Lower', None)
             )
             bulk_data.append(market_data)
 
@@ -311,6 +323,7 @@ def process_and_store_data(coin: Coin, df: pd.DataFrame) -> None:
     except Exception as e:
         logger.error(f"Error in process_and_store_data for {coin.symbol}: {str(e)}")
         raise
+
 
 
 def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:

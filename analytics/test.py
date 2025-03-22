@@ -6,149 +6,152 @@ import numpy as np
 import ta
 import logging
 from django.db import transaction
-from django.utils import timezone
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-# 1) Make sure Python can see the root folder (i.e., "back-end")
-PROJECT_ROOT = r"C:\Users\Ori\Desktop\back-end"
+# הגדרת סביבת Django
+PROJECT_ROOT = r"C:\Users\USER\Documents\ניצן\לימודים\פרויקט גמר - Cursor Ai\final-project"
 sys.path.append(PROJECT_ROOT)
-
-# 2) Point to your Django settings.
-#    Replace 'backend.settings' with the correct folder name if it's not actually "backend".
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.settings')
-
-# 3) Now initialize Django
 django.setup()
 
-# 4) Now that Django is set up, you can safely import your models
+# ייבוא המודלים
 from analytics.models import Coin, MarketData
 
 logger = logging.getLogger(__name__)
 
 def load_historical_data_from_csv():
     """
-    Load historical data from CSV files in HistoricalData folder and save to database with technical indicators.
+    טוען נתונים היסטוריים מתוך קובץ CSV של XRP, מחשב אינדיקטורים טכניים ושומר למסד הנתונים
     """
     try:
-        # Get only XRP coin
+        # 1️⃣ טוען את המטבע XRP
         try:
             coin = Coin.objects.get(symbol='XRP')
         except Coin.DoesNotExist:
             logger.error("XRP coin not found in database")
             return
 
-        file_path = os.path.join(PROJECT_ROOT, 'analytics', 'HistoricalData/xrp_binance_prices_2025_add.csv')
-        logger.info(f"Processing XRP data from {file_path}")
-        
-        # Read CSV file and sort by time
+        # 2️⃣ קריאת הנתונים מקובץ CSV
+        file_path = os.path.join(PROJECT_ROOT, 'analytics', 'HistoricalData', 'xrp_binance_prices_2025.csv')
+        print(f"📂 Processing XRP data from {file_path}")
+
         df = pd.read_csv(file_path)
-        df['Open Time'] = pd.to_datetime(df['Open Time'])
-        df['Close Time'] = pd.to_datetime(df['Close Time'])
-        df = df.sort_values('Open Time')
-        
-        # Calculate technical indicators
+
+        # 3️⃣ מחיקת עמודה Ignore אם קיימת
+        if 'Ignore' in df.columns:
+            df.drop(columns=['Ignore'], inplace=True)
+
+        # 4️⃣ המרת זמנים לפורמט datetime
+        df['Open Time'] = pd.to_datetime(df['Open Time'], dayfirst=True)
+        df['Close Time'] = df['Open Time'] + timedelta(minutes=1)
+
+        # 5️⃣ ווידוא שכל העמודות המספריות הן float
+        numeric_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'Quote Asset Volume',
+                           'Number of Trades', 'Taker Buy Base Volume', 'Taker Buy Quote Volume']
+        df[numeric_columns] = df[numeric_columns].astype(float)
+
+        # 6️⃣ שינוי שמות העמודות לפני חישוב האינדיקטורים
+        df.rename(columns={
+            'Open Time': 'open_time',
+            'Close Time': 'close_time',
+            'Open': 'open_price',
+            'High': 'high_price',
+            'Low': 'low_price',
+            'Close': 'close_price',
+            'Volume': 'volume',
+            'Quote Asset Volume': 'quote_volume',
+            'Number of Trades': 'num_trades',
+            'Taker Buy Base Volume': 'taker_buy_base_volume',
+            'Taker Buy Quote Volume': 'taker_buy_quote_volume'
+        }, inplace=True)
+
+        # 7️⃣ חישוב אינדיקטורים טכניים
         df = calculate_technical_indicators(df)
+
+        # 8️⃣ מילוי ערכים חסרים באינדיקטורים
+        indicator_columns = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'ATR', 'Williams_R']
+        df[indicator_columns] = df[indicator_columns].fillna(0).astype(float)
+
+        # 9️⃣ הוספת עמודת אינדיקטור שינוי מחיר
+        df['price_change_indicator'] = np.where(
+            df['close_price'] > df['open_price'], 1,
+            np.where(df['close_price'] < df['open_price'], -1, 0)
+        )
         
-        # Create a 24h shifted dataframe for price change calculation
-        # (assuming 1-minute intervals, so 24 hours = 24*60 rows)
-        df_24h_ago = df.shift(24*60)
-        
-        bulk_data = []
-        
-        for idx, row in df.iterrows():
-            open_time = timezone.make_aware(row['Open Time'].to_pydatetime())
-            close_time = timezone.make_aware(row['Close Time'].to_pydatetime())
-            
-            # Calculate 24h price change
-            old_price = df_24h_ago.loc[idx, 'Close'] if idx >= 24*60 else None
-            current_price = float(row['Close'])
-            
-            if old_price and float(old_price) > 0:
-                price_change = ((current_price - float(old_price)) / float(old_price) * 100)
-            else:
-                price_change = 0
-            
-            market_data = MarketData(
-                symbol=coin,
-                open_time=open_time,
-                close_time=close_time,
-                open_price=float(row['Open']),
-                high_price=float(row['High']),
-                low_price=float(row['Low']),
-                close_price=current_price,
-                volume=float(row['Volume']),
-                quote_volume=float(row['Quote Asset Volume']),
-                num_trades=int(row['Number of Trades']),
-                taker_buy_base_volume=float(row['Taker Buy Base Volume']),
-                taker_buy_quote_volume=float(row['Taker Buy Quote Volume']),
-                price_change_percent_24h=round(price_change, 2),
-                
-                # Add technical indicators
-                rsi=round(float(row['RSI']), 2) if not pd.isna(row['RSI']) else None,
-                macd=float(row['MACD']) if not pd.isna(row['MACD']) else None,
-                macd_signal=float(row['MACD_Signal']) if not pd.isna(row['MACD_Signal']) else None,
-                macd_hist=float(row['MACD_Hist']) if not pd.isna(row['MACD_Hist']) else None,
-                bb_upper=float(row['BB_Upper']) if not pd.isna(row['BB_Upper']) else None,
-                bb_middle=float(row['BB_Middle']) if not pd.isna(row['BB_Middle']) else None,
-                bb_lower=float(row['BB_Lower']) if not pd.isna(row['BB_Lower']) else None
-            )
-            bulk_data.append(market_data)
-            
-            # Bulk create in chunks of 5000
-            if len(bulk_data) >= 5000:
-                with transaction.atomic():
-                    MarketData.objects.bulk_create(
-                        bulk_data,
-                        batch_size=1000,
-                        ignore_conflicts=True
-                    )
-                logger.info(f"Saved {len(bulk_data)} records for XRP")
-                bulk_data = []
-        
-        # Save remaining records
-        if bulk_data:
-            with transaction.atomic():
-                MarketData.objects.bulk_create(
-                    bulk_data,
-                    batch_size=1000,
-                    ignore_conflicts=True
-                )
-            logger.info(f"Saved final {len(bulk_data)} records for XRP")
-        
-        total_records = MarketData.objects.filter(symbol=coin).count()
-        logger.info(f"Total records for XRP: {total_records}")
-        
+        # מחיקת שורות 2 עד 34 (אם הן לא רלוונטיות)
+        df.drop(df.index[1:34], inplace=True)
+
+        # 🔟 שמירת הנתונים לקובץ CSV
+        df.to_csv("xrp.csv", index=False, encoding="utf-8")
+        print("✅ הקובץ xrp.csv נשמר בהצלחה")
+
+        # שמירת הנתונים למסד נתונים - בהערה (כפי שביקשת)
+        # bulk_data = []
+        # for _, row in df.iterrows():
+        #     market_data = MarketData(
+        #         symbol=coin,
+        #         open_time=row['open_time'],
+        #         close_time=row['close_time'],
+        #         open_price=row['open_price'],
+        #         high_price=row['high_price'],
+        #         low_price=row['low_price'],
+        #         close_price=row['close_price'],
+        #         volume=row['volume'],
+        #         quote_volume=row['quote_volume'],
+        #         num_trades=int(row['num_trades']),
+        #         taker_buy_base_volume=row['taker_buy_base_volume'],
+        #         taker_buy_quote_volume=row['taker_buy_quote_volume'],
+        #         rsi=row['RSI'],
+        #         macd=row['MACD'],
+        #         macd_signal=row['MACD_Signal'],
+        #         macd_hist=row['MACD_Hist'],
+        #         bb_upper=row['BB_Upper'],
+        #         bb_middle=row['BB_Middle'],
+        #         bb_lower=row['BB_Lower'],
+        #         atr=row['ATR'],
+        #         williams_r=row['Williams_R']
+        #     )
+        #     bulk_data.append(market_data)
+
+        #     if len(bulk_data) >= 5000:
+        #         with transaction.atomic():
+        #             MarketData.objects.bulk_create(bulk_data, batch_size=1000, ignore_conflicts=True)
+        #         print(f"✅ Saved {len(bulk_data)} records for LTC")
+        #         bulk_data = []
+
+        # if bulk_data:
+        #     with transaction.atomic():
+        #         MarketData.objects.bulk_create(bulk_data, batch_size=1000, ignore_conflicts=True)
+        #     print(f"✅ Done saving LTC records!")
+
     except Exception as e:
         logger.error(f"Error in load_historical_data_from_csv: {str(e)}")
         raise
 
 def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate technical indicators for market data."""
-    try:
-        df = df.sort_values('Close Time')
-        
-        # Calculate RSI
-        rsi = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-        
-        # Calculate MACD
-        macd = ta.trend.MACD(df['Close'], window_fast=12, window_slow=26, window_sign=9)
-        df['MACD'] = macd.macd()
-        df['MACD_Signal'] = macd.macd_signal()
-        df['MACD_Hist'] = macd.macd_diff()
-        
-        # Calculate Bollinger Bands
-        bb = ta.volatility.BollingerBands(df['Close'], window=20, window_dev=2)
-        df['BB_Upper'] = bb.bollinger_hband()
-        df['BB_Middle'] = bb.bollinger_mavg()
-        df['BB_Lower'] = bb.bollinger_lband()
-        
-        df['RSI'] = rsi
-        
-        return df
+    """
+    חישוב אינדיקטורים טכניים עבור הנתונים
+    """
+    df = df.sort_values('close_time')
 
-    except Exception as e:
-        logger.error(f"Error calculating technical indicators: {str(e)}")
-        return df
+    df['RSI'] = ta.momentum.RSIIndicator(df['close_price'], window=14).rsi()
+
+    macd = ta.trend.MACD(df['close_price'], window_fast=12, window_slow=26, window_sign=9)
+    df['MACD'] = macd.macd()
+    df['MACD_Signal'] = macd.macd_signal()
+    df['MACD_Hist'] = macd.macd_diff()
+
+    bb = ta.volatility.BollingerBands(df['close_price'], window=20, window_dev=2)
+    df['BB_Upper'] = bb.bollinger_hband()
+    df['BB_Middle'] = bb.bollinger_mavg()
+    df['BB_Lower'] = bb.bollinger_lband()
+
+    atr = ta.volatility.AverageTrueRange(df['high_price'], df['low_price'], df['close_price'], window=14).average_true_range()
+    df['ATR'] = atr
+
+    df['Williams_R'] = ta.momentum.WilliamsRIndicator(df['high_price'], df['low_price'], df['close_price'], lbp=14).williams_r()
+
+    return df
 
 if __name__ == '__main__':
     load_historical_data_from_csv()
